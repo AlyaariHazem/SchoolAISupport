@@ -1,14 +1,24 @@
+using System.Text.Json.Serialization;
 using Azure.AI.OpenAI;
 using Azure.Identity;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.DevUI;
 using Microsoft.Agents.AI.Hosting;
 using Microsoft.Extensions.AI;
+using WebApi.Models;
+using WebApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.AddServiceDefaults();
+
+// Minimal APIs: camelCase properties and enum strings (e.g. userRole: "student").
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
+    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase));
+});
 
 // 1. Define the variables we extracted from Microsoft Foundry
 var endpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT") ?? throw new InvalidOperationException("AZURE_OPENAI_ENDPOINT is not set.");
@@ -25,18 +35,21 @@ IChatClient chatClient = new AzureOpenAIClient(
     .Build();
 builder.Services.AddSingleton(chatClient);
 
-// 3. Define and Register the Agents
+// 3. Register school support services (kept intentionally lightweight and easy to extend)
+var promptBuilder = new PromptBuilderService();
+builder.Services.AddSingleton(promptBuilder);
+builder.Services.AddSingleton<ConversationMemoryService>();
+builder.Services.AddSingleton<SchoolKnowledgeService>();
+builder.Services.AddSingleton<SupportRequestService>();
+builder.Services.AddScoped<AgentService>();
+
+// 4. Define and Register the AI agent
 builder.AddAIAgent(
     name: "NetworkSupportAgent",
-    instructions:
-        """
-        You are a Tier 1 IT Support Agent.
-        Your answers must be concise, professional, and limited strictly to troubleshooting network and VPN connectivity.        
-        Keep responses concise — 3-5 sentences per turn. Be direct and opinionated.        
-        """,
+    instructions: promptBuilder.BuildSystemInstructions(),
     chatClient);
 
-// 4. Register DevUI services
+// 5. Register DevUI services
 builder.AddDevUI();
 builder.Services.AddOpenAIResponses();
 builder.Services.AddOpenAIConversations();
@@ -51,14 +64,60 @@ app.MapDefaultEndpoints();
 app.MapDevUI();
 app.MapOpenAIResponses();
 app.MapOpenAIConversations();
-// Map chat endpoint to trigger the agent
-app.MapPost("/api/chat", async (ChatRequest request,
-    [FromKeyedServices("NetworkSupportAgent")] AIAgent networkSupportAgent) =>
+
+// School AI Support chat: validated input, bounded message size, structured success payload.
+app.MapPost("/api/chat", async (
+    ChatRequest request,
+    AgentService agentService,
+    CancellationToken cancellationToken,
+    ILoggerFactory loggerFactory) =>
 {
-    var response = await networkSupportAgent.RunAsync(request.Message);
-    return Results.Ok(new { response = response.Text });
-});
+    var log = loggerFactory.CreateLogger("SchoolChat");
+
+    var trimmedRequest = request with
+    {
+        Message = request.Message.Trim(),
+        ConversationId = string.IsNullOrWhiteSpace(request.ConversationId) ? null : request.ConversationId.Trim(),
+        UserName = string.IsNullOrWhiteSpace(request.UserName) ? null : request.UserName.Trim()
+    };
+
+    var validationErrors = ChatRequestValidator.Validate(trimmedRequest);
+    if (!ChatRequestValidator.IsValid(validationErrors))
+    {
+        return Results.ValidationProblem(validationErrors);
+    }
+
+    // Normalize conversation id: reuse client id or start a new thread.
+    var conversationId = string.IsNullOrWhiteSpace(trimmedRequest.ConversationId)
+        ? Guid.NewGuid().ToString("N")
+        : trimmedRequest.ConversationId;
+
+    var normalizedRequest = trimmedRequest with { ConversationId = conversationId };
+
+    try
+    {
+        var responseText = await agentService.GetResponseAsync(normalizedRequest, cancellationToken);
+        return Results.Ok(new SchoolChatResponse(conversationId, responseText));
+    }
+    catch (OperationCanceledException)
+    {
+        return Results.Problem(
+            statusCode: StatusCodes.Status499ClientClosedRequest,
+            title: "Request cancelled",
+            detail: "The client closed the connection before the assistant finished.");
+    }
+    catch (Exception ex)
+    {
+        log.LogError(ex, "Assistant failed for conversation {ConversationId}", conversationId);
+        return Results.Problem(
+            statusCode: StatusCodes.Status502BadGateway,
+            title: "Assistant unavailable",
+            detail: "The assistant could not complete your request. Please try again later.");
+    }
+})
+    .WithName("SchoolChat")
+    .Produces<SchoolChatResponse>(StatusCodes.Status200OK)
+    .ProducesValidationProblem()
+    .ProducesProblem(StatusCodes.Status502BadGateway);
 
 app.Run();
-
-record ChatRequest(string Message);

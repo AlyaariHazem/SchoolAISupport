@@ -4,7 +4,10 @@ POST {{WebApi_HostAddress}}/api/chat
 Content-Type: application/json
 
 {
-  "message": "My VPN keeps disconnecting every few minutes. What should I try?"
+  "message": "متى موعد الاختبار؟",
+  "userRole": "student",
+  "conversationId": "abc123",
+  "userName": "Ali"
 }
 
 ###
