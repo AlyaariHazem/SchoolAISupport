@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 520" font-family="Segoe UI, Arial, sans-serif">
+  <!-- Background -->
+  <rect width="860" height="520" fill="#f8fafc" rx="12"/>
+
+  <!-- Title -->
+  <text x="430" y="36" text-anchor="middle" font-size="20" font-weight="700" fill="#1e293b">Chat Request Flow — POST /api/chat</text>
+
+  <!-- Step boxes -->
+  <!-- Step 1: Client -->
+  <rect x="30" y="65" width="130" height="54" rx="9" fill="#e0f2fe" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="95" y="87" text-anchor="middle" font-size="12" font-weight="700" fill="#0369a1">① Client</text>
+  <text x="95" y="106" text-anchor="middle" font-size="10" fill="#0c4a6e">POST /api/chat</text>
+  <text x="95" y="119" text-anchor="middle" font-size="9" fill="#0c4a6e">{ message, userRole, … }</text>
+
+  <!-- Arrow 1→2 -->
+  <line x1="160" y1="92" x2="215" y2="92" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Step 2: Validate -->
+  <rect x="215" y="65" width="130" height="54" rx="9" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+  <text x="280" y="87" text-anchor="middle" font-size="12" font-weight="700" fill="#92400e">② Validate</text>
+  <text x="280" y="106" text-anchor="middle" font-size="10" fill="#78350f">ChatRequestValidator</text>
+  <text x="280" y="119" text-anchor="middle" font-size="9" fill="#78350f">400 on invalid input</text>
+
+  <!-- Arrow 2→3 -->
+  <line x1="345" y1="92" x2="400" y2="92" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Step 3: Memory -->
+  <rect x="400" y="65" width="130" height="54" rx="9" fill="#f0fdf4" stroke="#4ade80" stroke-width="1.5"/>
+  <text x="465" y="87" text-anchor="middle" font-size="12" font-weight="700" fill="#166534">③ Memory</text>
+  <text x="465" y="106" text-anchor="middle" font-size="10" fill="#14532d">ConversationMemory</text>
+  <text x="465" y="119" text-anchor="middle" font-size="9" fill="#14532d">Load recent turns</text>
+
+  <!-- Arrow 3→4 -->
+  <line x1="530" y1="92" x2="585" y2="92" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Step 4: Knowledge -->
+  <rect x="585" y="65" width="130" height="54" rx="9" fill="#fdf4ff" stroke="#c084fc" stroke-width="1.5"/>
+  <text x="650" y="87" text-anchor="middle" font-size="12" font-weight="700" fill="#581c87">④ Knowledge</text>
+  <text x="650" y="106" text-anchor="middle" font-size="10" fill="#4a1772">SchoolKnowledge</text>
+  <text x="650" y="119" text-anchor="middle" font-size="9" fill="#4a1772">Keyword-match docs</text>
+
+  <!-- Down arrow from Step 4 -->
+  <line x1="650" y1="119" x2="650" y2="175" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Step 5: SupportRequest -->
+  <rect x="585" y="175" width="130" height="54" rx="9" fill="#fff1f2" stroke="#fb7185" stroke-width="1.5"/>
+  <text x="650" y="197" text-anchor="middle" font-size="12" font-weight="700" fill="#881337">⑤ Support</text>
+  <text x="650" y="216" text-anchor="middle" font-size="10" fill="#9f1239">SupportRequest</text>
+  <text x="650" y="229" text-anchor="middle" font-size="9" fill="#9f1239">Escalation hints</text>
+
+  <!-- Left arrow from Step 5 to Step 6 -->
+  <line x1="585" y1="202" x2="530" y2="202" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Step 6: PromptBuilder -->
+  <rect x="400" y="175" width="130" height="54" rx="9" fill="#fff7ed" stroke="#fb923c" stroke-width="1.5"/>
+  <text x="465" y="197" text-anchor="middle" font-size="12" font-weight="700" fill="#7c2d12">⑥ Prompt</text>
+  <text x="465" y="216" text-anchor="middle" font-size="10" fill="#9a3412">PromptBuilder</text>
+  <text x="465" y="229" text-anchor="middle" font-size="9" fill="#9a3412">Role-aware instructions</text>
+
+  <!-- Left arrow Step 6 → Step 7 -->
+  <line x1="400" y1="202" x2="345" y2="202" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Step 7: AgentService -->
+  <rect x="215" y="175" width="130" height="54" rx="9" fill="#ecfdf5" stroke="#34d399" stroke-width="1.5"/>
+  <text x="280" y="197" text-anchor="middle" font-size="12" font-weight="700" fill="#064e3b">⑦ Agent</text>
+  <text x="280" y="216" text-anchor="middle" font-size="10" fill="#065f46">AgentService</text>
+  <text x="280" y="229" text-anchor="middle" font-size="9" fill="#065f46">Build messages list</text>
+
+  <!-- Down arrow Step 7 → Step 8 -->
+  <line x1="280" y1="229" x2="280" y2="285" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Step 8: Azure OpenAI -->
+  <rect x="215" y="285" width="130" height="54" rx="9" fill="#fef3c7" stroke="#fbbf24" stroke-width="2"/>
+  <text x="280" y="307" text-anchor="middle" font-size="12" font-weight="700" fill="#78350f">⑧ Azure OpenAI</text>
+  <text x="280" y="326" text-anchor="middle" font-size="10" fill="#92400e">IChatClient.Complete</text>
+  <text x="280" y="339" text-anchor="middle" font-size="9" fill="#92400e">Chat completion call</text>
+
+  <!-- Right arrow Step 8 → Step 9 -->
+  <line x1="345" y1="312" x2="400" y2="312" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Step 9: Save Memory -->
+  <rect x="400" y="285" width="130" height="54" rx="9" fill="#f0fdf4" stroke="#4ade80" stroke-width="1.5"/>
+  <text x="465" y="307" text-anchor="middle" font-size="12" font-weight="700" fill="#166534">⑨ Save</text>
+  <text x="465" y="326" text-anchor="middle" font-size="10" fill="#14532d">ConversationMemory</text>
+  <text x="465" y="339" text-anchor="middle" font-size="9" fill="#14532d">Append user + reply</text>
+
+  <!-- Right arrow Step 9 → Step 10 -->
+  <line x1="530" y1="312" x2="585" y2="312" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Step 10: Response -->
+  <rect x="585" y="285" width="130" height="54" rx="9" fill="#e0f2fe" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="650" y="307" text-anchor="middle" font-size="12" font-weight="700" fill="#0369a1">⑩ Response</text>
+  <text x="650" y="326" text-anchor="middle" font-size="10" fill="#0c4a6e">200 OK</text>
+  <text x="650" y="339" text-anchor="middle" font-size="9" fill="#0c4a6e">{ conversationId, response }</text>
+
+  <!-- Arrow response back to client -->
+  <path d="M650,339 Q650,420 95,420 Q95,420 95,119" stroke="#38bdf8" stroke-width="1.5" fill="none" stroke-dasharray="6,3" marker-end="url(#aBlue)"/>
+  <text x="380" y="442" text-anchor="middle" font-size="10" fill="#0369a1">JSON reply to client</text>
+
+  <!-- Telemetry side note -->
+  <rect x="30" y="285" width="160" height="54" rx="9" fill="#ede9fe" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="110" y="307" text-anchor="middle" font-size="11" font-weight="600" fill="#4c1d95">OpenTelemetry</text>
+  <text x="110" y="325" text-anchor="middle" font-size="10" fill="#5b21b6">Traces AI/Agent spans</text>
+  <text x="110" y="342" text-anchor="middle" font-size="10" fill="#5b21b6">DevUI at /devui</text>
+  <!-- Dashed arrow from AgentService to telemetry -->
+  <line x1="215" y1="315" x2="190" y2="315" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#aPurple)"/>
+
+  <!-- Error path note -->
+  <rect x="30" y="390" width="160" height="54" rx="9" fill="#fff1f2" stroke="#fb7185" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="110" y="412" text-anchor="middle" font-size="11" font-weight="600" fill="#881337">Error handling</text>
+  <text x="110" y="430" text-anchor="middle" font-size="10" fill="#9f1239">499 on cancel</text>
+  <text x="110" y="447" text-anchor="middle" font-size="10" fill="#9f1239">502 on AI failure</text>
+
+  <!-- Legend -->
+  <rect x="30" y="470" width="800" height="36" rx="8" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1"/>
+  <line x1="50" y1="488" x2="80" y2="488" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+  <text x="90" y="492" font-size="10" fill="#374151">Service call</text>
+  <line x1="195" y1="488" x2="225" y2="488" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#aBlue)"/>
+  <text x="235" y="492" font-size="10" fill="#374151">Response back to caller</text>
+  <line x1="400" y1="488" x2="430" y2="488" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#aPurple)"/>
+  <text x="440" y="492" font-size="10" fill="#374151">Telemetry / side-effect</text>
+
+  <defs>
+    <marker id="a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="aBlue" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#38bdf8"/>
+    </marker>
+    <marker id="aPurple" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L8,3 z" fill="#a78bfa"/>
+    </marker>
+  </defs>
+</svg>
