@@ -11,3 +11,44 @@ Content-Type: application/json
 }
 
 ###
+
+### Create support ticket (escalation)
+POST {{WebApi_HostAddress}}/api/support/requests
+Content-Type: application/json
+
+{
+  "issue": "Cannot access LMS after password reset; need admin to unlock account.",
+  "category": "technical",
+  "priority": "high",
+  "userRole": "teacher",
+  "userName": "Samira"
+}
+
+###
+
+### List support tickets (admin only)
+GET {{WebApi_HostAddress}}/api/admin/support-requests
+X-User-Role: admin
+
+###
+
+### Generate quiz from topic
+POST {{WebApi_HostAddress}}/api/tools/generate-quiz
+Content-Type: application/json
+
+{
+  "topic": "Photosynthesis for grade 8",
+  "questionCount": 3
+}
+
+###
+
+### Summarize school document
+POST {{WebApi_HostAddress}}/api/tools/summarize-document
+Content-Type: application/json
+
+{
+  "text": "Students must submit absence notes within 48 hours. Late arrivals must sign in at reception."
+}
+
+###

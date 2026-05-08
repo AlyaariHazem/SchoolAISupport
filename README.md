@@ -1,200 +1,320 @@
-# minimal-agent
+# School AI Support Agent
 
-A minimal ASP.NET Core Web API project for AI agent development. The goal is to represent agent interactions visually and trace **all events** during GenAI integration — including system prompts, tokens, model responses, tool calling, and more.
+A **.NET 10** reference implementation of a school-facing AI assistant: role-aware chat, lightweight document retrieval, support ticketing, and helper tools—built with **ASP.NET Core Minimal APIs**, **Microsoft.Extensions.AI**, **Azure OpenAI**, optional **.NET Aspire** orchestration, and **DevUI** for debugging agent flows.
 
-- **DevUI** — embedded visual dashboard for inspecting agent events in real-time
-- **Aspire Dashboard** — OpenTelemetry-powered distributed tracing across the full request pipeline
-- Uses `AddAIAgent` + `MapPost("/api/chat")` for a single-endpoint agent setup you can test immediately
+This repository is suitable as a starting point for a real deployment; tighten security, persistence, and identity before production use.
 
 ---
 
-## Solution Structure
+## Table of contents
+
+- [What it does](#what-it-does)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Setup](#setup)
+- [Azure OpenAI configuration](#azure-openai-configuration)
+- [Adding school documents](#adding-school-documents)
+- [API reference (examples)](#api-reference-examples)
+- [Observability](#observability)
+- [Screenshots](#screenshots)
+- [Roadmap](#roadmap)
+- [Security notes](#security-notes)
+- [License](#license)
+
+---
+
+## What it does
+
+The **School AI Support Agent** helps **students**, **teachers**, **parents**, and **admin** staff with common questions. It:
+
+- Answers in **Arabic first**, switching to **English** when the user writes in English.
+- Pulls **grounding context** from your own **`.txt` / `.md`** files under a `KnowledgeBase` folder (keyword search, not vectors).
+- Keeps **short in-memory conversation history** per `conversationId`.
+- Offers **REST APIs** for **support tickets**, **quiz generation**, and **document summarization** using the same Azure OpenAI deployment.
+
+---
+
+## Features
+
+| Area | Description |
+|------|-------------|
+| **Chat** | `POST /api/chat` with `message`, `userRole`, optional `conversationId` / `userName`; validated input and structured JSON response. |
+| **Prompts** | Centralized system prompt + per-role supplements (`PromptBuilderService`). |
+| **Knowledge base** | Files loaded at startup, chunked, scored by keywords; excerpts injected into the agent prompt or explicit “no school info” instruction. |
+| **Support tickets** | In-memory store; create and fetch by id; admin list with header gate (see [Security notes](#security-notes)). |
+| **Tools** | Quiz generation and school-text summarization via `IChatClient`. |
+| **Dev / ops** | **DevUI** at `/devui`; **OpenTelemetry** for AI/agent spans; **Aspire AppHost** for dashboard and multi-service layout. |
+
+---
+
+## Architecture
 
 ```
 src/
-├── AppHost/           # .NET Aspire orchestrator
-├── ServiceDefaults/   # Shared resilience, service-discovery & OpenTelemetry config
-└── WebApi/            # Minimal API hosting the AI agent, DevUI, and chat endpoint
+├── AppHost/                 # .NET Aspire orchestrator (optional run experience)
+├── ServiceDefaults/         # Shared HTTP resilience, service discovery, OpenTelemetry
+└── WebApi/                  # Minimal API: agent, chat, knowledge base, tools
+    ├── KnowledgeBase/       # School documents (.txt, .md) → copied to output
+    ├── Models/
+    ├── Services/
+    └── Program.cs           # Endpoints and DI registration
 ```
+
+**Request flow (chat)**
+
+1. Client calls `POST /api/chat`.
+2. `AgentService` loads recent turns from `ConversationMemoryService`.
+3. `SchoolKnowledgeService` retrieves top keyword-matched chunks from loaded documents.
+4. `SupportRequestService` may add escalation hints for sensitive keywords.
+5. `PromptBuilderService` supplies role-specific instructions in the user payload.
+6. Keyed `AIAgent` runs against **Azure OpenAI** via `IChatClient`.
+7. Assistant reply and user message are appended to memory.
 
 ---
 
-## 0 — Aspire Setup
+## Prerequisites
 
-The solution uses **.NET Aspire** (`Aspire.AppHost.Sdk/13.2.1`) targeting `net10.0`.  
-The AppHost orchestrates the WebApi project and wires up the Aspire Dashboard automatically for distributed tracing and logging.
-
----
-
-## 1 — AppHost
-
-`src/AppHost/AppHost.cs` registers the WebApi project and adds a custom **DevUI** URL to the Aspire dashboard:
-
-```csharp
-builder.AddProject<Projects.WebApi>("webapi")
-    .WithUrls(context =>
-    {
-        var baseUrl = context.Urls.FirstOrDefault();
-        if (baseUrl is not null)
-        {
-            context.Urls.Add(new()
-            {
-                Url = baseUrl.Url.TrimEnd('/') + "/devui",
-                DisplayText = "DevUI Visual App"
-            });
-        }
-    });
-```
-
-`WithUrls` appends a `/devui` link next to the default endpoint in the Aspire dashboard, so you can jump straight to the DevUI visual app without remembering the path.
+- [.NET SDK 10](https://dotnet.microsoft.com/download) (or the version targeted by the repo)
+- An **Azure OpenAI** resource with a chat-capable deployment
+- For local auth as configured in code: [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) login (`AzureCliCredential`)
+- Optional: **.NET Aspire** workload for running `AppHost`
 
 ---
 
-## 2 — ServiceDefaults
+## Setup
 
-`src/ServiceDefaults/Extensions.cs` provides shared infrastructure for every service in the solution.
+### 1. Clone and restore
 
-### Extended HTTP Resilience (tuned for LLM calls)
-
-```csharp
-builder.Services.ConfigureHttpClientDefaults(http =>
-{
-    http.AddStandardResilienceHandler(options =>
-    {
-        options.TotalRequestTimeout.Timeout = TimeSpan.FromMinutes(5);
-        options.AttemptTimeout.Timeout = TimeSpan.FromMinutes(3);
-        options.CircuitBreaker.SamplingDuration = TimeSpan.FromMinutes(6);
-        options.Retry.MaxRetryAttempts = 2;
-    });
-});
+```bash
+git clone <your-fork-or-upstream-url>
+cd minimal-agent
+dotnet restore src/MinimalAgent.slnx
 ```
 
-Timeouts are set much higher than defaults because LLM completions can take tens of seconds. The circuit breaker sampling window (`6 min`) exceeds the total timeout (`5 min`) so a single slow call doesn't trip the breaker.
+### 2. Configure environment
 
-### OpenTelemetry Trace Sources
+Set Azure OpenAI variables (see next section). You can use user-secrets, a `.env` file (not committed; see `.gitignore`), or your IDE launch profile.
 
-```csharp
-.WithTracing(tracing =>
-{
-    tracing.AddSource(builder.Environment.ApplicationName)
-        .AddSource("*Microsoft.Extensions.AI")
-        .AddSource("*Microsoft.Extensions.Agents*")
+### 3. Run the API
+
+**Option A — Web API only**
+
+```bash
+cd src/WebApi
+dotnet run
 ```
 
-These wildcard trace sources capture **every span** emitted by `Microsoft.Extensions.AI` and `Microsoft.Extensions.Agents`, which means system prompts, token counts, model responses, and tool-call events all appear in the Aspire Dashboard traces.
+Default HTTP URL is often `http://localhost:5043` (see `Properties/launchSettings.json`).
+
+**Option B — Aspire (dashboard + Web API)**
+
+```bash
+dotnet run --project src/AppHost/AppHost.csproj
+```
+
+Use the Aspire dashboard link for traces; open **DevUI** at `{webapi-base-url}/devui` (the AppHost also adds a convenience URL in the dashboard when configured).
 
 ---
 
-## 3 — WebApi
+## Azure OpenAI configuration
 
-### Packages
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AZURE_OPENAI_ENDPOINT` | **Yes** | Resource endpoint, e.g. `https://your-resource.openai.azure.com/` |
+| `AZURE_OPENAI_DEPLOYMENT_NAME` | No | Defaults to `gpt-5-mini` if unset |
 
-| Package | Purpose |
-|---|---|
-| `Azure.Identity` | `AzureCliCredential` for local dev auth |
-| `Azure.AI.OpenAI` | Azure OpenAI client SDK |
-| `Microsoft.Agents.AI.OpenAI` | Agent ↔ OpenAI bridge |
-| `Microsoft.Agents.AI.DevUI` | Embedded visual dashboard |
-| `Microsoft.Agents.AI.Hosting` | `AddAIAgent` / `AIAgent` hosting |
-| `Microsoft.Agents.AI.Hosting.OpenAI` | OpenAI-specific hosting (responses & conversations) |
+**Example (PowerShell)**
 
-### Program.cs — step by step
-
-**① Environment variables**
-
-```csharp
-var endpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT")
-    ?? throw new InvalidOperationException("AZURE_OPENAI_ENDPOINT is not set.");
-var deploymentName = Environment.GetEnvironmentVariable("AZURE_OPENAI_DEPLOYMENT_NAME")
-    ?? "gpt-5-mini";
+```powershell
+$env:AZURE_OPENAI_ENDPOINT = "https://your-resource.openai.azure.com/"
+$env:AZURE_OPENAI_DEPLOYMENT_NAME = "your-chat-deployment-name"
 ```
 
-`AZURE_OPENAI_ENDPOINT` is required; `AZURE_OPENAI_DEPLOYMENT_NAME` defaults to `gpt-5-mini`.
+**Example (bash)**
 
-**② Chat client with OpenTelemetry**
-
-```csharp
-IChatClient chatClient = new AzureOpenAIClient(
-        new Uri(endpoint),
-        new AzureCliCredential())
-    .GetChatClient(deploymentName)
-    .AsIChatClient()
-    .AsBuilder()
-    .UseOpenTelemetry(configure: c => c.EnableSensitiveData = true)
-    .Build();
+```bash
+export AZURE_OPENAI_ENDPOINT="https://your-resource.openai.azure.com/"
+export AZURE_OPENAI_DEPLOYMENT_NAME="your-chat-deployment-name"
 ```
 
-Builds a `Microsoft.Extensions.AI.IChatClient` from the Azure OpenAI SDK. `.UseOpenTelemetry(EnableSensitiveData = true)` ensures prompt text, completion text, and token usage are all emitted as trace attributes — visible in the Aspire Dashboard.
+The sample code uses `AzureCliCredential` for local development. For production, replace with a managed identity or another credential strategy appropriate to your host.
 
-**③ Agent registration**
+---
 
-```csharp
-builder.AddAIAgent(
-    name: "NetworkSupportAgent",
-    instructions: "...",
-    chatClient);
-```
+## Adding school documents
 
-Registers a keyed `AIAgent` named `"NetworkSupportAgent"` with a Tier 1 IT Support persona. The agent is resolved via `[FromKeyedServices("NetworkSupportAgent")]`.
+1. Add or edit files under:
 
-**④ DevUI + OpenAI middleware**
+   `src/WebApi/KnowledgeBase/`
 
-```csharp
-builder.AddDevUI();
-builder.Services.AddOpenAIResponses();
-builder.Services.AddOpenAIConversations();
-// ...
-app.MapDevUI();
-app.MapOpenAIResponses();
-app.MapOpenAIConversations();
-```
+2. Supported extensions: **`.txt`** and **`.md`** (any subfolder is allowed).
 
-`AddDevUI` / `MapDevUI` provides the visual event inspector at `/devui`. `AddOpenAIResponses` / `AddOpenAIConversations` wire up the OpenAI-compatible responses and conversation endpoints.
+3. Files are included in the build output (`WebApi.csproj` copies `KnowledgeBase/**`).
 
-**⑤ Chat endpoint**
+4. Restart the application after changing files so `SchoolKnowledgeStartupLoader` reloads content from disk.
 
-```csharp
-app.MapPost("/api/chat", async (ChatRequest request,
-    [FromKeyedServices("NetworkSupportAgent")] AIAgent networkSupportAgent) =>
-{
-    var response = await networkSupportAgent.RunAsync(request.Message);
-    return Results.Ok(new { response = response.Text });
-});
-```
+5. Retrieval is **keyword-based** (no embeddings). Use clear headings and vocabulary your users will actually type (including Arabic and English terms where relevant).
 
-A single POST endpoint that accepts a JSON body `{ "message": "..." }`, runs the agent, and returns the response text.
+---
 
-### WebApi.http
+## API reference (examples)
 
-A ready-to-use HTTP file for testing from Visual Studio:
+Base URL in samples: `http://localhost:5043` (adjust for your environment).
+
+### Chat
 
 ```http
-@WebApi_HostAddress = http://localhost:5043
-
-POST {{WebApi_HostAddress}}/api/chat
+POST /api/chat
 Content-Type: application/json
 
 {
-  "message": "My VPN keeps disconnecting every few minutes. What should I try?"
+  "message": "متى موعد الاختبار؟",
+  "userRole": "student",
+  "conversationId": "abc123",
+  "userName": "Ali"
 }
 ```
 
-Open `WebApi.http` in Visual Studio and click **Send Request** to test the agent without leaving the IDE.
+**Success (shape)**
+
+```json
+{
+  "conversationId": "abc123",
+  "response": "…"
+}
+```
+
+Roles: `student` | `teacher` | `parent` | `admin` (JSON camelCase enums).
+
+### Create support ticket
+
+```http
+POST /api/support/requests
+Content-Type: application/json
+
+{
+  "issue": "Cannot access LMS after password reset.",
+  "category": "technical",
+  "priority": "high",
+  "userRole": "teacher",
+  "userName": "Samira"
+}
+```
+
+Categories: `academic` | `attendance` | `technical` | `admin` | `other`  
+Priorities: `low` | `medium` | `high`
+
+### Get ticket by id
+
+```http
+GET /api/support/requests/{id}
+```
+
+### List all tickets (admin)
+
+```http
+GET /api/admin/support-requests
+X-User-Role: admin
+```
+
+### Generate quiz
+
+```http
+POST /api/tools/generate-quiz
+Content-Type: application/json
+
+{
+  "topic": "Photosynthesis for grade 8",
+  "questionCount": 3
+}
+```
+
+Provide **`topic` and/or `sourceText`**.
+
+### Summarize school document text
+
+```http
+POST /api/tools/summarize-document
+Content-Type: application/json
+
+{
+  "text": "Students must submit absence notes within 48 hours..."
+}
+```
+
+More requests are collected in [`src/WebApi/WebApi.http`](src/WebApi/WebApi.http) for IDE REST clients.
 
 ---
 
-## Testing End-to-End
+## Observability
 
-1. **Set environment variables**
-   ```
-   AZURE_OPENAI_ENDPOINT=https://<your-resource>.openai.azure.com/
-   AZURE_OPENAI_DEPLOYMENT_NAME=gpt-5-mini
-   ```
-2. **Run the Aspire AppHost** — start the `AppHost` project; it launches the WebApi and opens the Aspire Dashboard.
-3. **Open DevUI** — click the **"DevUI Visual App"** link in the Aspire Dashboard (or navigate to `http://localhost:5043/devui`).
-4. **Send a prompt** — use the `/api/chat` endpoint or `WebApi.http`:
-   ```
-   "My VPN keeps disconnecting every few minutes. What should I try?"
-   ```
-5. **Inspect DevUI** — see real-time agent events: system prompt, user message, model response, token usage, and tool calls.
-6. **Inspect Aspire Dashboard** — open the **Traces** tab to see the full distributed trace including OpenTelemetry GenAI spans with prompt/completion text and token counts.
+- **OpenTelemetry**: HTTP and runtime metrics; tracing includes wildcard sources for `Microsoft.Extensions.AI` and `Microsoft.Extensions.Agents` (see `ServiceDefaults/Extensions.cs`).
+- **Sensitive data**: The chat client enables OpenTelemetry **sensitive** payload capture for local debugging—**disable or redact for production**.
+- **DevUI**: Inspect agent-related activity at `/devui` during development.
+
+---
+
+## Screenshots
+
+Replace these placeholders with your own images (e.g. under `docs/images/`).
+
+| Placeholder | Suggested caption |
+|-------------|-------------------|
+| ![Chat / API test](docs/images/01-chat-placeholder.png) | Example chat or REST client calling `/api/chat` |
+| ![DevUI](docs/images/02-devui-placeholder.png) | DevUI agent trace or event view |
+| ![Aspire Dashboard](docs/images/03-aspire-placeholder.png) | Aspire dashboard traces (optional) |
+
+```markdown
+<!-- Example once you add real files:
+![Chat](docs/images/chat.png)
+![DevUI](docs/images/devui.png)
+-->
+```
+
+---
+
+## Roadmap
+
+Ideas for hardening and extending this sample:
+
+- **Retrieval**: Embeddings + vector store; hybrid search; citation links.
+- **Persistence**: Database for tickets, conversations, and audit logs.
+- **Auth**: OAuth2 / Entra ID; map claims to `userRole`; remove header-only admin checks.
+- **Streaming**: SSE or chunked responses for `/api/chat`.
+- **Rate limiting** and abuse controls; content safety filters.
+- **Configuration**: Key Vault, deployment-specific prompts, feature flags.
+- **Tests**: Integration tests against Azure OpenAI or a mock `IChatClient`.
+
+Contributions via issues and PRs are welcome.
+
+---
+
+## Security notes
+
+This project prioritizes **clarity and local development** over production hardening. Before exposing to the internet:
+
+| Topic | Current behavior | Recommendation |
+|--------|------------------|----------------|
+| **Admin API** | `X-User-Role: admin` header | Replace with real authentication and authorization. |
+| **Support tickets** | In-memory only | Persist securely; restrict who can read PII. |
+| **Credentials** | `AzureCliCredential` in sample | Use managed identity or workload identity in Azure. |
+| **Telemetry** | May log prompts/completions | Turn off sensitive capture in production; control OTLP endpoints. |
+| **Chat input** | Length-limited but not scanned | Add moderation, PII policies, and school-specific safeguards as needed. |
+| **Knowledge base** | File-based, trusted content | Treat uploads as sensitive; version and review documents. |
+
+Do not commit secrets. Use environment variables, Key Vault, or CI secret stores.
+
+---
+
+## License
+
+This project is licensed under the **MIT License** — see the [`LICENSE`](LICENSE) file for the full text.
+
+Copyright (c) 2026 Hazem Alyaari
+
+---
+
+## Acknowledgments
+
+Built with **ASP.NET Core**, **Microsoft.Extensions.AI**, **Azure OpenAI**, and **Microsoft Agents** packages. Optional orchestration via **.NET Aspire**.
