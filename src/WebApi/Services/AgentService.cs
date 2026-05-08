@@ -16,17 +16,20 @@ public class AgentService
     private readonly ConversationMemoryService _conversationMemoryService;
     private readonly SchoolKnowledgeService _schoolKnowledgeService;
     private readonly SupportRequestService _supportRequestService;
+    private readonly PromptBuilderService _promptBuilder;
 
     public AgentService(
         IServiceProvider serviceProvider,
         ConversationMemoryService conversationMemoryService,
         SchoolKnowledgeService schoolKnowledgeService,
-        SupportRequestService supportRequestService)
+        SupportRequestService supportRequestService,
+        PromptBuilderService promptBuilder)
     {
         _networkSupportAgent = serviceProvider.GetRequiredKeyedService<AIAgent>("NetworkSupportAgent");
         _conversationMemoryService = conversationMemoryService;
         _schoolKnowledgeService = schoolKnowledgeService;
         _supportRequestService = supportRequestService;
+        _promptBuilder = promptBuilder;
     }
 
     public async Task<string> GetResponseAsync(ChatRequest request, CancellationToken cancellationToken = default)
@@ -51,7 +54,7 @@ public class AgentService
         return result.Text;
     }
 
-    private static string BuildInputPrompt(
+    private string BuildInputPrompt(
         ChatRequest request,
         IReadOnlyList<ConversationTurn> history,
         string knowledgeContext,
@@ -71,11 +74,16 @@ public class AgentService
             ? "Name not provided."
             : request.UserName.Trim();
 
+        var roleSupplement = _promptBuilder.BuildRoleSupplement(request.UserRole);
+
         return
             $"""
             User context:
             Role: {request.UserRole}
             Display name: {userLabel}
+
+            Role-specific instructions (must follow):
+            {roleSupplement}
 
             School context:
             {knowledgeContext}
