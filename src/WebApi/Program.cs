@@ -40,6 +40,7 @@ var promptBuilder = new PromptBuilderService();
 builder.Services.AddSingleton(promptBuilder);
 builder.Services.AddSingleton<ConversationMemoryService>();
 builder.Services.AddSingleton<SchoolKnowledgeService>();
+builder.Services.AddHostedService<SchoolKnowledgeStartupLoader>();
 builder.Services.AddSingleton<SupportRequestService>();
 builder.Services.AddScoped<AgentService>();
 

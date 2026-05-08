@@ -6,7 +6,7 @@ namespace WebApi.Services;
 /// <summary>
 /// Orchestrates the school support request flow:
 /// - reads conversation memory
-/// - adds lightweight school context
+/// - injects school knowledge base excerpts (keyword retrieval)
 /// - applies escalation hinting
 /// - calls the underlying AI agent
 /// </summary>
@@ -41,7 +41,7 @@ public class AgentService
             ?? throw new InvalidOperationException("ConversationId must be set before calling the agent.");
 
         var history = _conversationMemoryService.GetRecentHistory(conversationId);
-        var knowledgeContext = _schoolKnowledgeService.GetKnowledgeContext(request.Message);
+        var knowledgeContext = _schoolKnowledgeService.BuildPromptContext(request.Message);
         var supportDecision = _supportRequestService.Evaluate(request.Message);
 
         var prompt = BuildInputPrompt(request, history, knowledgeContext, supportDecision);
