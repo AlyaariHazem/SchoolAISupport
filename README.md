@@ -2,10 +2,10 @@
 
 [![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet)](https://dotnet.microsoft.com/download)
 [![ASP.NET Core](https://img.shields.io/badge/ASP.NET_Core-Minimal_APIs-512BD4?logo=dotnet)](https://learn.microsoft.com/aspnet/core/fundamentals/minimal-apis)
-[![Azure OpenAI](https://img.shields.io/badge/Azure_OpenAI-Chat_Completion-0078D4?logo=microsoftazure)](https://learn.microsoft.com/azure/ai-services/openai/)
+[![OpenAI API](https://img.shields.io/badge/OpenAI_API-Chat-412991?logo=openai)](https://platform.openai.com/docs)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A **.NET 10** reference implementation of a school-facing AI assistant: role-aware bilingual chat (Arabic / English), lightweight document retrieval, support ticketing, and AI-powered tools — built with **ASP.NET Core Minimal APIs**, **Microsoft.Extensions.AI**, **Azure OpenAI**, optional **.NET Aspire** orchestration, and **DevUI** for debugging agent flows.
+A **.NET 10** reference implementation of a school-facing AI assistant: role-aware bilingual chat (Arabic / English), lightweight document retrieval, support ticketing, and AI-powered tools — built with **ASP.NET Core Minimal APIs**, **Microsoft.Extensions.AI**, the **OpenAI API** (`IChatClient`), optional **.NET Aspire** orchestration, and **DevUI** for debugging agent flows.
 
 > **Note:** This repository is a solid starting point for a real deployment. Tighten security, persistence, and identity before going to production (see [Security notes](#security-notes)).
 
@@ -19,7 +19,7 @@ A **.NET 10** reference implementation of a school-facing AI assistant: role-awa
 - [Chat request flow](#chat-request-flow)
 - [Prerequisites](#prerequisites)
 - [Setup](#setup)
-- [Azure OpenAI configuration](#azure-openai-configuration)
+- [OpenAI API configuration](#openai-api-configuration)
 - [Adding school documents](#adding-school-documents)
 - [API reference](#api-reference)
 - [Observability](#observability)
@@ -37,7 +37,7 @@ The **School AI Support Agent** helps **students**, **teachers**, **parents**, a
 - Answers in **Arabic first**, switching to **English** when the user writes in English.
 - Pulls **grounding context** from your own **`.txt` / `.md`** files under a `KnowledgeBase/` folder (keyword search — no vector embeddings required).
 - Keeps **short in-memory conversation history** per `conversationId`.
-- Offers **REST APIs** for **support tickets**, **quiz generation**, and **document summarization** using the same Azure OpenAI deployment.
+- Offers **REST APIs** for **support tickets**, **quiz generation**, and **document summarization** using the same OpenAI-backed `IChatClient`.
 
 ---
 
@@ -49,8 +49,8 @@ The **School AI Support Agent** helps **students**, **teachers**, **parents**, a
 | **Prompts** | Centralized system prompt + per-role supplements via `PromptBuilderService`. |
 | **Knowledge base** | `.txt` / `.md` files loaded at startup, chunked, and scored by keyword; matching excerpts are injected into the agent prompt automatically. |
 | **Support tickets** | In-memory store; create and fetch by ID; admin list endpoint gated by a role header (see [Security notes](#security-notes)). |
-| **AI Tools** | Quiz generation and school-text summarization powered by `IChatClient` and Azure OpenAI. |
-| **Dev / ops** | **DevUI** at `/devui`; **OpenTelemetry** for AI/agent spans; **Aspire AppHost** for dashboard and multi-service orchestration. |
+| **AI Tools** | Quiz generation and school-text summarization powered by `IChatClient` and the OpenAI API. |
+| **Dev / ops** | **Swagger UI** at `/swagger` (Development) for all REST endpoints; **DevUI** at `/devui`; **OpenTelemetry** for AI/agent spans; **Aspire AppHost** for dashboard and multi-service orchestration. |
 
 ---
 
@@ -82,7 +82,7 @@ graph TD
     Knowledge["SchoolKnowledgeService"]
     Support["SupportRequestService"]
     Prompt["PromptBuilderService"]
-    AOAI["Azure OpenAI\nIChatClient"]
+    AOAI["OpenAI API\nIChatClient"]
     Store["SupportTicketStore"]
     Quiz["QuizGenerationService"]
     Summarize["SchoolDocumentSummarizationService"]
@@ -120,7 +120,7 @@ Step-by-step walkthrough of `POST /api/chat`:
 | 3 | `SchoolKnowledgeService` | Scores and returns top keyword-matched document chunks. |
 | 4 | `SupportRequestService` | Appends escalation instructions if sensitive keywords are present. |
 | 5 | `PromptBuilderService` | Builds role-specific system instructions (Arabic-first; student / teacher / parent / admin tone). |
-| 6 | `AgentService` | Assembles the full message list and calls `IChatClient` → Azure OpenAI. |
+| 6 | `AgentService` | Assembles the full message list and calls `IChatClient` → OpenAI API. |
 | 7 | `ConversationMemoryService` | Appends the user message and assistant reply back to memory. |
 | 8 | Endpoint | Returns `200 OK` with `{ conversationId, response }`. |
 
@@ -129,8 +129,7 @@ Step-by-step walkthrough of `POST /api/chat`:
 ## Prerequisites
 
 - [.NET SDK 10](https://dotnet.microsoft.com/download) — matches the `<TargetFramework>` in the project files
-- An **Azure OpenAI** resource with a chat-capable model deployment
-- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) logged in (`az login`) — used for `AzureCliCredential` in local development
+- An [OpenAI](https://platform.openai.com/) **API key** with access to a chat model (e.g. `gpt-4o-mini`)
 - Optional: **.NET Aspire** workload (`dotnet workload install aspire`) for running the `AppHost` with a live dashboard
 
 ---
@@ -147,7 +146,7 @@ dotnet restore src/MinimalAgent.slnx
 
 ### 2. Configure environment variables
 
-Set the Azure OpenAI variables before running (see [Azure OpenAI configuration](#azure-openai-configuration)). Options:
+Set the OpenAI variables before running (see [OpenAI API configuration](#openai-api-configuration)). If `OPENAI_API_KEY` is missing, the app still starts; chat and AI tool endpoints return **503** with a clear configuration message. Options:
 
 - Shell environment variables (examples below)
 - .NET user-secrets (`dotnet user-secrets set ...` inside `src/WebApi`)
@@ -175,28 +174,28 @@ The Aspire dashboard URL appears in the terminal. Open **DevUI** at `{webapi-bas
 
 ---
 
-## Azure OpenAI configuration
+## OpenAI API configuration
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `AZURE_OPENAI_ENDPOINT` | **Yes** | Resource endpoint, e.g. `https://your-resource.openai.azure.com/` |
-| `AZURE_OPENAI_DEPLOYMENT_NAME` | No | Name of your chat model deployment. Defaults to `gpt-4o-mini` if unset. |
+| `OPENAI_API_KEY` | **Yes** (for LLM features) | Your [OpenAI API key](https://platform.openai.com/api-keys). If unset, the host starts but `/api/chat`, `/api/tools/generate-quiz`, and `/api/tools/summarize-document` return **503** with a friendly error. |
+| `OPENAI_MODEL` | No | Chat model id. Defaults to **`gpt-4o-mini`**. |
 
 **PowerShell**
 
 ```powershell
-$env:AZURE_OPENAI_ENDPOINT = "https://your-resource.openai.azure.com/"
-$env:AZURE_OPENAI_DEPLOYMENT_NAME = "your-chat-deployment-name"
+$env:OPENAI_API_KEY = "sk-..."
+$env:OPENAI_MODEL = "gpt-4o-mini"
 ```
 
 **Bash / zsh**
 
 ```bash
-export AZURE_OPENAI_ENDPOINT="https://your-resource.openai.azure.com/"
-export AZURE_OPENAI_DEPLOYMENT_NAME="your-chat-deployment-name"
+export OPENAI_API_KEY="sk-..."
+export OPENAI_MODEL="gpt-4o-mini"
 ```
 
-The sample uses `AzureCliCredential` for local development. For production, replace with a **managed identity** or **workload identity** appropriate to your Azure host.
+Treat API keys as secrets: use environment variables, a secret manager, or your host’s vault — never commit them to git.
 
 ---
 
@@ -221,6 +220,8 @@ Example files already in the repository:
 ## API reference
 
 ![API Endpoints](docs/images/api-reference.svg)
+
+**Interactive docs (Development):** open **`/swagger`** on the Web API base URL (e.g. `https://localhost:7127/swagger` or `http://localhost:5043/swagger`). That UI lists every minimal-API route with schemas and lets you try requests. It does not include framework extras such as **`/devui`** or other Microsoft Agents OpenAI endpoints — those remain separate.
 
 Base URL in all examples: `http://localhost:5043` — adjust for your environment.
 
@@ -338,7 +339,7 @@ Content-Type: application/json
 
 | Diagram | Description |
 |---------|-------------|
-| ![Architecture](docs/images/architecture.svg) | Full system: clients, WebApi services, Azure OpenAI, and observability |
+| ![Architecture](docs/images/architecture.svg) | Full system: clients, WebApi services, OpenAI API, and observability |
 | ![Chat flow](docs/images/chat-flow.svg) | Step-by-step chat request flow through all services |
 | ![API reference](docs/images/api-reference.svg) | All REST endpoints with HTTP methods and response codes |
 
@@ -354,7 +355,7 @@ Ideas for hardening and extending this sample:
 - **Streaming** — Server-Sent Events (SSE) or chunked transfer for `/api/chat` responses.
 - **Safety** — Rate limiting, abuse controls, and Azure AI Content Safety integration.
 - **Configuration** — Azure Key Vault for secrets; deployment-specific prompts; feature flags.
-- **Tests** — Integration tests against Azure OpenAI or a mock `IChatClient`.
+- **Tests** — Integration tests against the OpenAI API or a mock `IChatClient`.
 
 Contributions via issues and pull requests are welcome.
 
@@ -368,7 +369,7 @@ This project is optimized for **clarity and local development**, not production 
 |-------|-----------------|----------------|
 | **Admin API** | `X-User-Role: admin` HTTP header | Replace with real authentication and authorization (e.g. Entra ID roles). |
 | **Support tickets** | Stored in-memory only | Persist to a database; restrict who can read PII fields. |
-| **Credentials** | `AzureCliCredential` (local dev) | Use managed identity or workload identity on Azure. |
+| **Credentials** | `OPENAI_API_KEY` in environment | Use a secret store in production; never log or expose keys. |
 | **Telemetry** | May log full prompt / completion text | Disable `EnableSensitiveData` in production; control OTLP collector access. |
 | **Chat input** | Length-limited but not scanned | Add content moderation, PII detection, and school-appropriate safeguards. |
 | **Knowledge base** | File-based, trusted content only | Version-control and review all documents; treat as sensitive school data. |
@@ -387,4 +388,4 @@ Copyright (c) 2026 Hazem Alyaari
 
 ## Acknowledgments
 
-Built with **ASP.NET Core**, **Microsoft.Extensions.AI**, **Azure OpenAI**, and **Microsoft Agents** packages. Optional orchestration and dashboard via **.NET Aspire**.
+Built with **ASP.NET Core**, **Microsoft.Extensions.AI**, the **OpenAI** .NET SDK, and **Microsoft Agents** packages. Optional orchestration and dashboard via **.NET Aspire**.
