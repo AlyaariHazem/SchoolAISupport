@@ -6,10 +6,56 @@ using Microsoft.Extensions.AI;
 using Microsoft.OpenApi;
 using OpenAI;
 using OpenAI.Chat;
+using System.ClientModel;
+using WebApi.Configuration;
 using WebApi.Endpoints;
 using WebApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Development: pick up OpenAI:ApiKey from MySchool Backend when both repos share the repo root (…/School/MySchool/Backend).
+if (builder.Environment.IsDevelopment())
+{
+    var backendDevSettings = Path.GetFullPath(Path.Combine(
+        builder.Environment.ContentRootPath,
+        "..", "..", "..", "MySchool", "Backend", "appsettings.Development.json"));
+    if (File.Exists(backendDevSettings))
+        builder.Configuration.AddJsonFile(backendDevSettings, optional: true, reloadOnChange: true);
+}
+
+builder.Services.Configure<OpenAiOptions>(builder.Configuration.GetSection(OpenAiOptions.SectionName));
+
+// Browser clients: in Development, allow any localhost / 127.0.0.1 origin (any port — e.g. ng serve on 4700).
+// In non-Development, set Cors:Origins in appsettings / env.
+var corsOrigins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>();
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("SchoolPortal", policy =>
+    {
+        if (builder.Environment.IsDevelopment())
+        {
+            policy
+                .SetIsOriginAllowed(static origin =>
+                {
+                    if (string.IsNullOrEmpty(origin)) return false;
+                    if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)) return false;
+                    return string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase)
+                        || uri.Host == "127.0.0.1";
+                })
+                .AllowAnyHeader()
+                .AllowAnyMethod();
+        }
+        else if (corsOrigins is { Length: > 0 })
+        {
+            policy.WithOrigins(corsOrigins).AllowAnyHeader().AllowAnyMethod();
+        }
+        else
+        {
+            policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
+        }
+    });
+});
 
 // Add services to the container.
 builder.AddServiceDefaults();
@@ -33,23 +79,43 @@ builder.Services.AddSwaggerGen(options =>
             """
             REST API for the school assistant: **Chat**, **Support tickets**, and **Tools** (quiz + summarize).
             Agent debugging UI: `/devui`. OpenTelemetry traces: Aspire dashboard when using AppHost.
-            LLM routes require `OPENAI_API_KEY` (503 with a clear message if missing).
+            LLM routes require **OpenAI** settings (`OpenAI:ApiKey` in appsettings, User Secrets, or env `OPENAI__API_KEY`).
             """
     });
 });
 
-// 1. OpenAI API (standard) — key optional so the app can start and return friendly errors from HTTP endpoints.
-var openAiApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY")?.Trim();
-var openAiModel = Environment.GetEnvironmentVariable("OPENAI_MODEL")?.Trim();
+// 1. OpenAI — same keys as MySchool Backend (`OpenAI:ApiKey`, `OpenAI:Model`) plus env fallbacks.
+var openAiOpts = builder.Configuration.GetSection(OpenAiOptions.SectionName).Get<OpenAiOptions>() ?? new OpenAiOptions();
+
+var openAiApiKey = openAiOpts.ApiKey?.Trim();
+if (string.IsNullOrEmpty(openAiApiKey))
+    openAiApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY")?.Trim();
+
+var openAiModel = openAiOpts.Model?.Trim();
 if (string.IsNullOrEmpty(openAiModel))
-{
+    openAiModel = Environment.GetEnvironmentVariable("OPENAI_MODEL")?.Trim();
+if (string.IsNullOrEmpty(openAiModel))
     openAiModel = "gpt-4o-mini";
-}
+
+var configuredBaseUrl = openAiOpts.BaseUrl?.Trim();
 
 IChatClient chatClient;
 if (!string.IsNullOrEmpty(openAiApiKey))
 {
-    chatClient = new OpenAIClient(openAiApiKey)
+    var credential = new ApiKeyCredential(openAiApiKey);
+    OpenAIClient openAiClient;
+    if (!string.IsNullOrEmpty(configuredBaseUrl)
+        && Uri.TryCreate(configuredBaseUrl.TrimEnd('/') + "/", UriKind.Absolute, out var endpointUri))
+    {
+        var clientOptions = new OpenAIClientOptions { Endpoint = endpointUri };
+        openAiClient = new OpenAIClient(credential, clientOptions);
+    }
+    else
+    {
+        openAiClient = new OpenAIClient(credential);
+    }
+
+    chatClient = openAiClient
         .GetChatClient(openAiModel)
         .AsIChatClient()
         .AsBuilder()
@@ -64,7 +130,10 @@ else
     {
         IsConfigured = false,
         ConfigurationHint =
-            "OpenAI is not configured. Set the OPENAI_API_KEY environment variable to a valid API key (and optionally OPENAI_MODEL, default gpt-4o-mini), then restart the application."
+            """
+            OpenAI is not configured. Set OpenAI:ApiKey in appsettings, user secrets (dotnet user-secrets set "OpenAI:ApiKey" "sk-..."),
+            or environment OPENAI_API_KEY / OPENAI__API_KEY, then restart.
+            """
     });
 }
 
@@ -95,6 +164,8 @@ builder.Services.AddOpenAIConversations();
 
 
 var app = builder.Build();
+
+app.UseCors("SchoolPortal");
 
 // Configure the HTTP request pipeline.
 app.MapDefaultEndpoints();

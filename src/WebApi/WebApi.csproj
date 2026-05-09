@@ -4,6 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>minimal-agent-webapi-8f4e3d2c-1b0a-9f8e-7d6c-5b4a3210fedc</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
