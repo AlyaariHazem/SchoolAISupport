@@ -10,20 +10,34 @@ using System.ClientModel;
 using WebApi.Configuration;
 using WebApi.Endpoints;
 using WebApi.Services;
+using WebApi.Services.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Development: pick up OpenAI:ApiKey from MySchool Backend when both repos share the repo root (…/School/MySchool/Backend).
-if (builder.Environment.IsDevelopment())
+// Merge MySchool Backend connection strings + OpenAI when in Development, or when SchoolData:MergeBackendConfiguration=true.
+var mergeBackend = builder.Environment.IsDevelopment()
+    || string.Equals(builder.Configuration["SchoolData:MergeBackendConfiguration"], "true", StringComparison.OrdinalIgnoreCase);
+
+if (mergeBackend)
 {
-    var backendDevSettings = Path.GetFullPath(Path.Combine(
-        builder.Environment.ContentRootPath,
-        "..", "..", "..", "MySchool", "Backend", "appsettings.Development.json"));
-    if (File.Exists(backendDevSettings))
-        builder.Configuration.AddJsonFile(backendDevSettings, optional: true, reloadOnChange: true);
+    var configuredRoot = builder.Configuration["SchoolData:MySchoolBackendPath"]?.Trim();
+    var backendDir = !string.IsNullOrEmpty(configuredRoot)
+        ? Path.GetFullPath(configuredRoot)
+        : Path.GetFullPath(Path.Combine(
+            builder.Environment.ContentRootPath,
+            "..", "..", "..", "MySchool", "Backend"));
+    var backendBase = Path.Combine(backendDir, "appsettings.json");
+    var backendDev = Path.Combine(backendDir, "appsettings.Development.json");
+    if (File.Exists(backendBase))
+        builder.Configuration.AddJsonFile(backendBase, optional: true, reloadOnChange: true);
+    if (File.Exists(backendDev))
+        builder.Configuration.AddJsonFile(backendDev, optional: true, reloadOnChange: true);
 }
 
 builder.Services.Configure<OpenAiOptions>(builder.Configuration.GetSection(OpenAiOptions.SectionName));
+builder.Services.AddHttpContextAccessor();
+builder.Services.Configure<SchoolDataOptions>(builder.Configuration.GetSection(SchoolDataOptions.SectionName));
+builder.Services.AddSingleton<ITenantConnectionStringResolver, SqlMasterTenantConnectionResolver>();
 
 // Browser clients: in Development, allow any localhost / 127.0.0.1 origin (any port — e.g. ng serve on 4700).
 // In non-Development, set Cors:Origins in appsettings / env.
@@ -80,6 +94,7 @@ builder.Services.AddSwaggerGen(options =>
             REST API for the school assistant: **Chat**, **Support tickets**, and **Tools** (quiz + summarize).
             Agent debugging UI: `/devui`. OpenTelemetry traces: Aspire dashboard when using AppHost.
             LLM routes require **OpenAI** settings (`OpenAI:ApiKey` in appsettings, User Secrets, or env `OPENAI__API_KEY`).
+            Per-tenant DB: send **tenantId** on `/api/chat`; master DB via `SchoolData:MasterConnectionString` or `ConnectionStrings:SqlAdminConnection`. Optional static fallback: `SchoolData:ConnectionString` or `TenantDesignTime`.
             """
     });
 });
@@ -149,13 +164,35 @@ builder.Services.AddSingleton<SupportRequestService>();
 builder.Services.AddSingleton<SupportTicketStore>();
 builder.Services.AddSingleton<QuizGenerationService>();
 builder.Services.AddSingleton<SchoolDocumentSummarizationService>();
+builder.Services.AddSingleton<ISchoolDataService, SqlSchoolDataService>();
+builder.Services.AddSingleton<SchoolDatabaseToolHandlers>();
 builder.Services.AddScoped<AgentService>();
 
-// 4. Define and Register the AI agent
-builder.AddAIAgent(
-    name: "NetworkSupportAgent",
-    instructions: promptBuilder.BuildSystemInstructions(),
-    chatClient);
+// 4. Register the AI agent with school database tools (live SQL — no invented numbers)
+builder.AddAIAgent("NetworkSupportAgent", static (sp, _) =>
+{
+    var chat = sp.GetRequiredService<IChatClient>();
+    var prompts = sp.GetRequiredService<PromptBuilderService>();
+    var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+    var handlers = sp.GetRequiredService<SchoolDatabaseToolHandlers>();
+    IList<AITool> tools =
+    [
+        AIFunctionFactory.Create(handlers.GetStudentsCountAsync),
+        AIFunctionFactory.Create(handlers.GetClassesCountAsync),
+        AIFunctionFactory.Create(handlers.GetStudentByIdAsync),
+        AIFunctionFactory.Create(handlers.GetStudentsByClassAsync),
+        AIFunctionFactory.Create(handlers.GetAttendanceSummaryAsync),
+        AIFunctionFactory.Create(handlers.GetAbsenceCountAsync),
+    ];
+
+    return chat.AsAIAgent(
+        instructions: prompts.BuildSystemInstructions(),
+        name: "NetworkSupportAgent",
+        description: "School AI support with read-only database tools for students, classes, and attendance.",
+        tools: tools,
+        loggerFactory: loggerFactory,
+        services: sp);
+});
 
 // 5. Register DevUI services
 builder.AddDevUI();
