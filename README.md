@@ -20,6 +20,7 @@ A **.NET 10** reference implementation of a school-facing AI assistant: role-awa
 - [Prerequisites](#prerequisites)
 - [Setup](#setup)
 - [OpenAI API configuration](#openai-api-configuration)
+- [School data + tenant configuration](#school-data--tenant-configuration)
 - [Adding school documents](#adding-school-documents)
 - [API reference](#api-reference)
 - [Observability](#observability)
@@ -50,6 +51,7 @@ The **School AI Support Agent** helps **students**, **teachers**, **parents**, a
 | **Knowledge base** | `.txt` / `.md` files loaded at startup, chunked, and scored by keyword; matching excerpts are injected into the agent prompt automatically. |
 | **Support tickets** | In-memory store; create and fetch by ID; admin list endpoint gated by a role header (see [Security notes](#security-notes)). |
 | **AI Tools** | Quiz generation and school-text summarization powered by `IChatClient` and the OpenAI API. |
+| **School SQL tools (chat)** | Read-only database-backed tools used by `/api/chat` for student/class/attendance queries; responses are grounded in SQL results (`VERIFIED_FROM_DATABASE`) and avoid invented numbers. |
 | **Dev / ops** | **Swagger UI** at `/swagger` (Development) for all REST endpoints; **DevUI** at `/devui`; **OpenTelemetry** for AI/agent spans; **Aspire AppHost** for dashboard and multi-service orchestration. |
 
 ---
@@ -61,9 +63,14 @@ src/
 ├── AppHost/            # .NET Aspire orchestrator (optional)
 ├── ServiceDefaults/    # Shared HTTP resilience, service discovery, OpenTelemetry
 └── WebApi/             # Minimal API -- agent, chat, knowledge base, tools
+    ├── Configuration/  # OpenAI + SchoolData typed options
+    ├── Endpoints/      # Chat, support, and AI tools routes
+    ├── Infrastructure/ # Per-request tenant DB connection context
     ├── KnowledgeBase/  # School documents (.txt, .md) -- copied to build output
     ├── Models/         # Request / response records
+    ├── Security/       # JWT TenantId reader for chat requests
     ├── Services/       # AgentService, PromptBuilder, KnowledgeService, ...
+    │   └── Data/       # SQL-backed school data tools + tenant resolver
     └── Program.cs      # Endpoint definitions and DI registration
 ```
 
@@ -180,6 +187,7 @@ The Aspire dashboard URL appears in the terminal. Open **DevUI** at `{webapi-bas
 |----------|----------|-------------|
 | `OPENAI_API_KEY` | **Yes** (for LLM features) | Your [OpenAI API key](https://platform.openai.com/api-keys). If unset, the host starts but `/api/chat`, `/api/tools/generate-quiz`, and `/api/tools/summarize-document` return **503** with a friendly error. |
 | `OPENAI_MODEL` | No | Chat model id. Defaults to **`gpt-4o-mini`**. |
+| `OPENAI__API_KEY` | No (alternative) | .NET-style env key alternative to `OPENAI_API_KEY` for nested config binding. |
 
 **PowerShell**
 
@@ -196,6 +204,30 @@ export OPENAI_MODEL="gpt-4o-mini"
 ```
 
 Treat API keys as secrets: use environment variables, a secret manager, or your host’s vault — never commit them to git.
+
+---
+
+## School data + tenant configuration
+
+The chat agent includes read-only SQL tools for school data (students, classes, attendance, absence counts).  
+Connection behavior is tenant-aware:
+
+- With `Authorization: Bearer <jwt>` on `POST /api/chat`, the API reads `TenantId` from the token and resolves that tenant’s DB connection from the master `dbo.Tenants` table.
+- Without Bearer auth, chat data tools can still work if a static fallback tenant connection is configured.
+
+`SchoolData` section in `src/WebApi/appsettings.json`:
+
+| Key | Required | Description |
+|-----|----------|-------------|
+| `SchoolData:ConnectionString` | No | Static tenant DB fallback (single-school/dev mode). |
+| `SchoolData:MasterConnectionString` | Recommended for multi-tenant | Master/admin DB containing `dbo.Tenants` used to resolve tenant DB by `TenantId`. |
+| `SchoolData:MergeBackendConfiguration` | No | When `true`, loads MySchool Backend `appsettings*.json` even outside Development. |
+| `SchoolData:MySchoolBackendPath` | No | Optional absolute path to the MySchool Backend folder that contains `appsettings.json`. |
+
+Related connection-string fallback keys:
+
+- `ConnectionStrings:SqlAdminConnection` (master/admin DB fallback when `SchoolData:MasterConnectionString` is empty)
+- `ConnectionStrings:TenantDesignTime` or `ConnectionStrings:TenantConnection` (static tenant fallback)
 
 ---
 
@@ -232,6 +264,7 @@ All POST endpoints require `Content-Type: application/json`. Enum values use cam
 ```http
 POST /api/chat
 Content-Type: application/json
+Authorization: Bearer <MySchool JWT with TenantId claim>   # optional but required for per-tenant DB resolution
 
 {
   "message": "متى موعد الاختبار؟",
@@ -251,6 +284,9 @@ Content-Type: application/json
 ```
 
 Valid `userRole` values: `student` | `teacher` | `parent` | `admin`
+
+If Bearer auth is provided but `TenantId` cannot be read, the endpoint returns `401 Unauthorized`.  
+If tenant DB resolution fails or SQL is unavailable, it returns `503 Service Unavailable` with a diagnostic message.
 
 ### Create support ticket
 
